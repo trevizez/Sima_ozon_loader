@@ -12,6 +12,7 @@ class GetParams:
         self.params = {
             'by_sid': True
         }
+        self.wholesale_category = {'Опт', 'Опт «Зоотовары»'}
         self.headers = None
         self.body = {
             "email": tmp.sima_email,
@@ -38,40 +39,52 @@ class GetParams:
         except requests.exceptions.RequestException as e:
             print(f'Error during API key retrieval: {e}')
 
+    def get_json_from_api(self, article):
+        try:
+            json = requests.get(f'{self.item_url}{article[0].value}', params=self.params, headers=self.headers)
+            json.raise_for_status()
+            if json.status_code == 401:
+                self.get_api_key()
+            elif json.status_code == 200:
+                return json.json()
+        except requests.exceptions.RequestException as e:
+            print(f'Error during json retrieval: {e}')
+        except Exception as e:
+            print(f"An unexpected error occurred: {e}")
+        return None
+
+    def process_api_response(self, json):
+        if json.get('wholesale').get('label') in self.wholesale_category:
+            price = json.get('wholesale_price') * json.get('minimum_order_quantity')
+        else:
+            price = json.get('price') * json.get('minimum_order_quantity')
+        amount_tuple = json.get('settlements_balance')[0]
+        amount = amount_tuple.get('balance', amount_tuple.get('balance_text'))
+        return price, amount
+
+    def update_excel_data(self, pos, price, amount):
+        self.work_sheet[f'B{pos + 2}'] = price
+        if amount == 'Достаточно':
+            self.work_sheet[f'C{pos + 2}'] = 100
+        elif amount < 3:
+            self.work_sheet[f'C{pos + 2}'] = 0
+        else:
+            self.work_sheet[f'C{pos + 2}'] = amount
+
+    def save_excel_file(self):
+        self.work_book.save(tmp.articles_file)
+
     def get_data(self):
         if not self.api_key:
             self.get_api_key()
-        try:
-            for pos, article in enumerate(self.work_sheet.iter_rows(min_row=2, max_col=1)):
-                json = requests.get(f'{self.item_url}{article[0].value}', params=self.params, headers=self.headers)
-                json.raise_for_status()
-                if json.status_code == 200:
-                    data = json.json()
-                    print(data)
-                    print(data.get('wholesale').get('label'))
-                    if data.get('wholesale').get('label') == 'Опт' or data.get('wholesale').get('label') == 'Опт «Зоотовары»':
-                        price = data.get('wholesale_price') * data.get('minimum_order_quantity')
-                    else:
-                        price = data.get('price') * data.get('minimum_order_quantity')
-                    amount_tuple = data.get('settlements_balance')[0]
-                    if amount_tuple.get('balance') is not None:
-                        amount = amount_tuple.get('balance')
-                    else:
-                        amount = amount_tuple.get('balance_text')
-                    print(amount)
-                    self.work_sheet[f'B{pos + 2}'] = price
-                    if amount == 'Достаточно':
-                        self.work_sheet[f'C{pos + 2}'] = 100
-                    elif amount < 3:
-                        self.work_sheet[f'C{pos + 2}'] = 0
-                    else:
-                        self.work_sheet[f'C{pos + 2}'] = amount
-        except requests.exceptions.RequestException as e:
-            print(f'Error during data retrieval: {e}')
-        except Exception as e:
-            print(f"An unexpected error occurred: {e}")
-        finally:
-            self.work_book.save(tmp.articles_file)
+
+        for pos, article in enumerate(self.work_sheet.iter_rows(min_row=2, max_col=1)):
+            if article[0].value is not None:
+                json = self.get_json_from_api(article)
+                if json is not None:
+                    price, amount = self.process_api_response(json)
+                    self.update_excel_data(pos, price, amount)
+        self.save_excel_file()
 
 
 obj = GetParams()
